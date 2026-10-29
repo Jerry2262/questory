@@ -1,0 +1,127 @@
+/* 结构化任务树的编辑层补充；任务行主体复用 src/styles.css 的 .tree 样式 */
+.page-loading {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.tree li {
+  position: relative;
+}
+
+.tree .quest-check {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.tree .quest-check:disabled {
+  cursor: default;
+}
+
+.tree .quest-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  field-sizing: content;
+  resize: none;
+  overflow: hidden;
+  border: 0;
+  background: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  line-height: inherit;
+  color: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tree .quest-title::placeholder {
+  color: var(--faint);
+}
+
+.tree .quest-move {
+  border: 0;
+  background: none;
+  font: inherit;
+}
+
+.tree .quest-menu {
+  top: calc(100% + 2px);
+  right: 0;
+}
+
+.tree .quest-note-field {
+  margin: 0;
+}
+
+.tree .note-field {
+  width: 100%;
+  field-sizing: content;
+  resize: none;
+  overflow: hidden;
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  line-height: inherit;
+  color: inherit;
+}
+
+.tree .review-editor {
+  margin: 0.6rem 0 0.2rem;
+}
+
+.tree .review-field {
+  display: block;
+  width: 100%;
+  field-sizing: content;
+  resize: none;
+  overflow: hidden;
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  line-height: inherit;
+  color: inherit;
+}
+
+.tree .review-field::placeholder,
+.tree .note-field::placeholder {
+  color: var(--faint);
+}
+
+.tree .header-editor {
+  margin: 0.6rem 0 0.2rem;
+}
+
+.tree .header-field {
+  display: block;
+  width: 100%;
+  field-sizing: content;
+  resize: none;
+  overflow: hidden;
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  line-height: inherit;
+  color: inherit;
+}
+
+.tree .quest-title:focus,
+.tree .note-field:focus,
+.tree .review-field:focus,
+.tree .header-field:focus {
+  outline: none;
+}
+
+.tree .quest-add {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}

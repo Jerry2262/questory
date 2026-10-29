@@ -1,0 +1,32 @@
+{
+  "name": "questory",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx server/index.ts",
+    "build": "tsc --noEmit && vite build",
+    "test": "vitest run",
+    "test:e2e": "tsx e2e/tree.ts",
+    "start": "NODE_ENV=production tsx server/index.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.5",
+    "hono": "^4.13.14",
+    "immer": "^11.2.9",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "playwright": "1.64.1",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "vite": "8.3.5",
+    "vitest": "5.0.5"
+  },
+  "license": "MIT",
+  "version": "0.1.0"
+}
