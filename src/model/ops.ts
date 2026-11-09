@@ -147,7 +147,8 @@ export function setTitle(doc: QuestDoc, weekId: string, questId: string, title: 
   return edit(doc, (draft) => {
     const location = findQuest(draft, weekId, questId)
     if (!location) return null
-    location.quest.title = title
+    // 任务标题是单行字段：Shift+Enter、粘贴或历史数据里的硬换行都归一成空格
+    location.quest.title = title.replace(/\r\n?|\n/g, ' ')
     return { id: questId }
   })
 }

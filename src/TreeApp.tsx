@@ -48,6 +48,25 @@ function previousQuestId(doc: QuestDoc | null, weekId: string, questId: string):
   return index > 0 ? ids[index - 1] : null
 }
 
+/** 页面渲染顺序里的全部任务 id：周从新到旧，四象限固定顺序，象限内深度优先；假期周不渲染，跳过 */
+function renderedQuestIds(doc: QuestDoc | null): string[] {
+  const ids: string[] = []
+  const walk = (quests: Quest[]) => {
+    for (const quest of quests) {
+      ids.push(quest.id)
+      walk(quest.children)
+    }
+  }
+  for (const week of doc?.weeks ?? []) {
+    if (week.kind === 'holiday') continue
+    for (const key of QUADRANT_KEYS) {
+      const quadrant = week.quadrants.find((item) => item.key === key)
+      if (quadrant) walk(quadrant.children)
+    }
+  }
+  return ids
+}
+
 function useAutoGrow(ref: RefObject<HTMLTextAreaElement | null>, value: string) {
   const observerRef = useRef<ResizeObserver | null>(null)
   const observedRef = useRef<HTMLTextAreaElement | null>(null)
@@ -273,7 +292,7 @@ function PageHeader({ store }: { store: Store }) {
           <span className="legend-mark">—</span>失效
         </span>
         <span className="legend-note">
-          勾选框切换未完成/完成；作废、备注、移动、删除在行尾 ⋮ 菜单；Enter 加下一条，Tab/Shift+Tab 缩进
+          勾选框切换未完成/完成；作废、备注、移动、删除在行尾 ⋮ 菜单；Enter 加下一条，Tab/Shift+Tab 缩进，↑/↓ 切换任务
         </span>
       </p>
     </header>
@@ -699,6 +718,27 @@ function QuestRow({
 
   const onTitleKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (event.nativeEvent.isComposing) return
+    // 任务标题单行：Shift+Enter 不插入换行
+    if (event.key === 'Enter' && event.shiftKey) {
+      event.preventDefault()
+      return
+    }
+    // 任务标题里，未加修饰键的上下键在任务间移动；首尾不动，其他组合保持原生
+    if (
+      (event.key === 'ArrowUp' || event.key === 'ArrowDown') &&
+      !event.shiftKey &&
+      !event.altKey &&
+      !event.metaKey &&
+      !event.ctrlKey
+    ) {
+      event.preventDefault()
+      const ids = renderedQuestIds(store.doc)
+      const index = ids.indexOf(quest.id)
+      if (index < 0) return
+      const target = ids[index + (event.key === 'ArrowUp' ? -1 : 1)]
+      if (target) store.focusTitle(target)
+      return
+    }
     if (event.key === 'Backspace' && isEmptyLeaf(quest)) {
       // 空行退格删行：复用 ⋮ 的删除（同一操作 + 8 秒撤销），焦点回到上一条
       event.preventDefault()

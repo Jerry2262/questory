@@ -498,8 +498,134 @@ try {
   await page.waitForTimeout(300)
   assert.equal(await page.locator('.back-to-top').count(), 0, '回到顶部后按钮应消失')
 
+  // 任务标题上下键：在渲染顺序里移动任务，跨周连续；首尾和修饰键组合不接管
+  const focusedQuestId = async (): Promise<string | null> =>
+    (await page.evaluate(`(() => {
+      const active = document.activeElement
+      return active ? active.closest('li[data-quest-id]')?.getAttribute('data-quest-id') ?? null : null
+    })()`)) as string | null
+  const waitFocused = async (expected: string, label: string) => {
+    const deadline = Date.now() + 3_000
+    while (Date.now() < deadline) {
+      if ((await focusedQuestId()) === expected) return
+      await page.waitForTimeout(50)
+    }
+    throw new Error(`焦点未移动到预期任务：${label}`)
+  }
+
+  const visibleIdsByWeek = async (): Promise<string[][]> =>
+    (await page.evaluate(`(() => {
+      const tree = document.querySelector('.tree')
+      if (!tree) return []
+      const groups = []
+      let current = null
+      for (const node of Array.from(tree.children)) {
+        if (node.tagName === 'H2' && node.hasAttribute('data-week-id')) {
+          current = []
+          groups.push(current)
+          continue
+        }
+        if (!current) continue
+        for (const title of node.querySelectorAll('textarea.quest-title')) {
+          const li = title.closest('li[data-quest-id]')
+          if (li) current.push(li.getAttribute('data-quest-id'))
+        }
+      }
+      return groups
+    })()`)) as string[][]
+
+  const idsByWeek = await visibleIdsByWeek()
+  const flatIds = idsByWeek.flat()
+  assert.ok(flatIds.length > 2, '应有足够的任务用于上下键测试')
+
+  const middle = Math.floor(flatIds.length / 2)
+  await page.locator('textarea.quest-title').nth(middle).click()
+  await page.keyboard.press('ArrowDown')
+  await waitFocused(flatIds[middle + 1], '↓ 下一条')
+  assert.equal(await focusedQuestId(), flatIds[middle + 1], '↓ 应移动到下一条任务')
+
+  await page.keyboard.press('ArrowUp')
+  await waitFocused(flatIds[middle], '↑ 上一条')
+  assert.equal(await focusedQuestId(), flatIds[middle], '↑ 应回到上一条任务')
+
+  await page.locator('textarea.quest-title').nth(0).click()
+  await page.keyboard.press('ArrowUp')
+  await page.waitForTimeout(150)
+  assert.equal(await focusedQuestId(), flatIds[0], '第一条任务按 ↑ 不应移动')
+
+  await page.locator('textarea.quest-title').nth(flatIds.length - 1).click()
+  await page.keyboard.press('ArrowDown')
+  await page.waitForTimeout(150)
+  assert.equal(await focusedQuestId(), flatIds[flatIds.length - 1], '最后一条任务按 ↓ 不应移动')
+
+  assert.ok(idsByWeek.length > 1 && idsByWeek[0].length && idsByWeek[1].length, '应有相邻两周任务')
+  await page.locator('textarea.quest-title').nth(idsByWeek[0].length - 1).click()
+  await page.keyboard.press('ArrowDown')
+  await waitFocused(idsByWeek[1][0], '跨周下一条')
+  assert.equal(await focusedQuestId(), idsByWeek[1][0], '↓ 应跨周到下一周第一条任务')
+
+  await page.locator('textarea.quest-title').nth(middle).click()
+  const beforeShift = await focusedQuestId()
+  await page.keyboard.press('Shift+ArrowDown')
+  await page.waitForTimeout(150)
+  assert.equal(await focusedQuestId(), beforeShift, 'Shift+↓ 应保持原生选择，不移动任务')
+
+  // Home/End 保持行首/行尾（先换成短标题，避免长标题折行后 Home 只到视觉行首）
+  const homeTitle = page.locator('textarea.quest-title').nth(0)
+  await homeTitle.click()
+  await homeTitle.fill('短标题')
+  await page.keyboard.press('Home')
+  assert.equal(
+    await homeTitle.evaluate((el) => (el as HTMLTextAreaElement).selectionStart),
+    0,
+    'Home 应保持行首',
+  )
+  await page.keyboard.press('End')
+  assert.equal(
+    await homeTitle.evaluate((el) => (el as HTMLTextAreaElement).selectionEnd),
+    (await homeTitle.inputValue()).length,
+    'End 应保持行尾',
+  )
+
+  // 任务标题单行：Shift+Enter 和粘贴/填入的换行都归一成空格
+  const multilineTitle = page.locator('textarea.quest-title').nth(1)
+  await multilineTitle.click()
+  const beforeMultiline = await multilineTitle.inputValue()
+  await multilineTitle.press('Shift+Enter')
+  await page.waitForTimeout(150)
+  assert.equal(await multilineTitle.inputValue(), beforeMultiline, 'Shift+Enter 不应给任务标题加换行')
+  await multilineTitle.fill('第一行\n第二行')
+  await waitData((doc) => find(doc, '第一行 第二行') !== undefined, '任务标题换行归一后落盘')
+  assert.equal(await multilineTitle.inputValue(), '第一行 第二行', '任务标题里的换行应归一成空格')
+  assert.equal(
+    allQuests(read()).some((quest) => quest.title.includes('\n')),
+    false,
+    '任务标题里不应出现换行',
+  )
+
+  // 假期周的任务保留在数据里但不渲染：上下键应跳过整周，落到下一个可见周
+  const holidayHeadId = (await page.locator('.tree h2[data-week-id]').nth(1).getAttribute('data-week-id')) as string
+  const holidayHead = page.locator(`.tree h2[data-week-id="${holidayHeadId}"]`)
+  await holidayHead.hover()
+  await holidayHead.locator('button.week-kind-toggle').click()
+  await waitData(
+    (doc) => doc.weeks.find((week) => week.id === holidayHeadId)?.kind === 'holiday',
+    '假期周落盘',
+  )
+
+  const afterHolidayIds = await visibleIdsByWeek()
+  const beforeHolidayTasks = afterHolidayIds[0]
+  assert.ok(beforeHolidayTasks.length, '假期周前应有一周任务')
+  assert.equal(afterHolidayIds[1].length, 0, '假期周的任务不应渲染')
+  assert.ok(afterHolidayIds[2].length, '假期周后应有一周任务')
+
+  await page.locator('textarea.quest-title').nth(beforeHolidayTasks.length - 1).click()
+  await page.keyboard.press('ArrowDown')
+  await waitFocused(afterHolidayIds[2][0], '跳过假期周后的下一条')
+  assert.equal(await focusedQuestId(), afterHolidayIds[2][0], '↓ 应跳过不渲染的假期周任务')
+
   assert.deepEqual(errors, [], '页面不应有运行时错误')
-  console.log('e2e: 标题/Enter/Tab/勾选/备注/周标题备注/删除撤销/保存/周跳转/回到顶部 全部通过')
+  console.log('e2e: 标题/Enter/Tab/勾选/备注/周标题备注/删除撤销/保存/周跳转/回到顶部/上下键/单行标题/假期周跳过 全部通过')
 } finally {
   // 服务启动超时、浏览器崩溃、spawn 失败等路径也走这里：先确认进程退出，再删临时目录
   await browser?.close().catch(() => undefined)

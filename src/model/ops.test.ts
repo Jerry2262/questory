@@ -262,6 +262,10 @@ describe('task tree operations', () => {
     checked(titled.doc)
     expect(titled.doc.weeks[0].quadrants[0].children[0].title).toBe('A changed')
 
+    const multiline = setTitle(doc, 'w2', 'b', '第一行\r\n第二行')!
+    checked(multiline.doc)
+    expect(findQuest(multiline.doc, 'w2', 'b')!.quest.title).toBe('第一行 第二行')
+
     const noted = setNote(doc, 'w2', 'b', 'hello')!
     checked(noted.doc)
     expect(noted.doc.weeks[0].quadrants[0].children[1].note).toBe('hello')
