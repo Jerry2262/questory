@@ -1,10 +1,11 @@
+import { statusOf } from './derive'
 import { hashId } from './ids'
 import type { Quadrant, Quest, QuestDoc, Week } from './types'
 
 /**
- * 周继承：当本周缺失时，用「最后一个填过的周」把整棵任务树复制过来。
- * 只复制任务（含完成/失效），不复制复盘；中间缺失的周不补空周；假期周跳过。
- * 规则见 DESIGN.md「周」。
+ * 周继承：当本周缺失时，用「最后一个填过的周」把未关闭的顶层任务带过来。
+ * 顶层已关闭的任务不继承；未关闭的顶层任务整棵子树（含已完成/失效的子项，作为过程上下文）保留。
+ * 不复制复盘；中间缺失的周不补空周；假期周跳过。规则见 DESIGN.md「周」。
  */
 
 const TIME_ZONE = 'Asia/Shanghai'
@@ -28,6 +29,8 @@ export interface RolloverInfo {
   source: string | null
   /** 新周里的任务节点总数（含子任务） */
   inherited: number
+  /** 因顶层已关闭而没有继承的任务数 */
+  skippedClosed: number
   /** 找继承源时跳过了几个假期周 */
   skippedHolidays: number
   /** 当前的周标签 */
@@ -108,6 +111,11 @@ export function countQuests(week: Week): number {
   return week.quadrants.reduce((sum, quadrant) => sum + walk(quadrant.children), 0)
 }
 
+/** 顶层任务数：象限的直接子节点，不递归 */
+function countTopLevel(week: Week): number {
+  return week.quadrants.reduce((sum, quadrant) => sum + quadrant.children.length, 0)
+}
+
 /** 文档里已占用的全部 id（周 + 任务），新生成的 id 必须避开它们 */
 function usedIds(doc: QuestDoc): Set<string> {
   const used = new Set<string>()
@@ -135,29 +143,33 @@ function uniqueId(used: Set<string>, base: string): string {
   return id
 }
 
-/** 深拷贝整棵子树：新 id、叶子状态/备注保留，父任务不写状态 */
-function cloneQuests(quests: Quest[], path: (string | number)[], used: Set<string>): Quest[] {
-  return quests.map((quest, index) => {
-    const here = [...path, index]
-    return {
-      id: uniqueId(used, hashId('quest', ...here)),
-      title: quest.title,
-      ...(quest.children.length
-        ? quest.voided
-          ? { voided: true }
-          : {}
-        : { status: quest.status ?? 'open' }),
-      ...(quest.note ? { note: quest.note } : {}),
-      children: cloneQuests(quest.children, here, used),
-    }
-  })
+/** 深拷贝整棵子树：新 id、叶子状态/备注保留，父任务不写状态；关闭的子项也原样保留 */
+function cloneSubtree(quest: Quest, path: (string | number)[], used: Set<string>): Quest {
+  return {
+    id: uniqueId(used, hashId('quest', ...path)),
+    title: quest.title,
+    ...(quest.children.length
+      ? quest.voided
+        ? { voided: true }
+        : {}
+      : { status: quest.status ?? 'open' }),
+    ...(quest.note ? { note: quest.note } : {}),
+    children: quest.children.map((child, index) => cloneSubtree(child, [...path, index], used)),
+  }
+}
+
+/** 只剪顶层已关闭的任务；未关闭的顶层任务整棵子树一起继承，保留执行上下文 */
+function cloneTopLevel(quests: Quest[], path: (string | number)[], used: Set<string>): Quest[] {
+  return quests.flatMap((quest, index) =>
+    statusOf(quest) === 'open' ? [cloneSubtree(quest, [...path, index], used)] : [],
+  )
 }
 
 function inheritWeek(source: Week, label: string, used: Set<string>): Week {
   const quadrants: Quadrant[] = source.quadrants
     .map((quadrant) => ({
       key: quadrant.key,
-      children: cloneQuests(quadrant.children, [label, quadrant.key], used),
+      children: cloneTopLevel(quadrant.children, [label, quadrant.key], used),
     }))
     .filter((quadrant) => quadrant.children.length > 0)
 
@@ -182,6 +194,7 @@ export function ensureCurrentWeek(doc: QuestDoc, now: Date = new Date()): Ensure
     created: false,
     source: null,
     inherited: 0,
+    skippedClosed: 0,
     skippedHolidays: 0,
     label: current.label,
   }
@@ -215,6 +228,7 @@ export function ensureCurrentWeek(doc: QuestDoc, now: Date = new Date()): Ensure
   info.created = true
   info.source = source?.label ?? null
   info.inherited = countQuests(created)
+  info.skippedClosed = source ? countTopLevel(source) - countTopLevel(created) : 0
 
   return { doc: { ...doc, weeks: [created, ...weeks] }, info }
 }

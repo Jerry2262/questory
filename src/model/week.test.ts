@@ -77,7 +77,7 @@ describe('周继承', () => {
     expect(result.doc).toBe(doc)
   })
 
-  it('本周缺失时从上一个填过的周全量继承', () => {
+  it('本周缺失时继承未关闭的顶层任务，关闭的顶层任务排除', () => {
     const source = makeWeek('2026 10.19-10.25', [
       parent('p', [leaf('c1', 'done'), leaf('c2', 'open')], '父任务'),
       leaf('v', 'void', '作废的'),
@@ -89,15 +89,14 @@ describe('周继承', () => {
     expect(result.info).toMatchObject({
       created: true,
       source: '2026 10.19-10.25',
-      inherited: 5,
+      inherited: 3,
+      skippedClosed: 2,
     })
     expect(created.label).toBe('2026 11.2-11.8')
-    expect(created.quadrants[0].children).toHaveLength(3)
+    expect(created.quadrants[0].children).toHaveLength(1)
     expect(created.quadrants[0].children[0].title).toBe('父任务')
     expect(created.quadrants[0].children[0]).not.toHaveProperty('status')
     expect(created.quadrants[0].children[0].children.map((q) => q.status)).toEqual(['done', 'open'])
-    expect(created.quadrants[0].children[1].status).toBe('void')
-    expect(created.quadrants[0].children[2].note).toBe('备注')
     expect(result.doc.header).toEqual(['页头'])
     expect(result.doc.weeks).toHaveLength(2)
   })
@@ -139,7 +138,7 @@ describe('周继承', () => {
   it('假期周不作为继承源', () => {
     const doc = makeDoc(
       makeWeek('2026 10.26-11.1', [leaf('a', 'open')], { kind: 'holiday' }),
-      makeWeek('2026 10.19-10.25', [leaf('b', 'done')]),
+      makeWeek('2026 10.19-10.25', [leaf('b', 'open')]),
     )
     const result = ensureCurrentWeek(doc, new Date('2026-11-02T09:00:00+08:00'))
     expect(result.info).toMatchObject({
@@ -148,7 +147,7 @@ describe('周继承', () => {
       skippedHolidays: 1,
       inherited: 1,
     })
-    expect(result.doc.weeks[0].quadrants[0].children[0].status).toBe('done')
+    expect(result.doc.weeks[0].quadrants[0].children[0].status).toBe('open')
   })
 
   it('上一周只写了复盘时继承为空，不翻更早的旧账', () => {
@@ -197,15 +196,83 @@ describe('周继承', () => {
     expect(currentWeekOf(doc, new Date('2026-10-26T09:00:00+08:00'))).toBeNull()
   })
 
-  it('父任务的显式作废覆盖会继承，子任务状态不变', () => {
+  it('顶层显式作废的任务整棵不继承', () => {
     const source = parent('p', [leaf('a', 'open'), leaf('b', 'done')])
     source.voided = true
     const doc = makeDoc(makeWeek('2026 10.26-11.1', [source]))
     const result = ensureCurrentWeek(doc, new Date('2026-11-03T09:00:00+08:00'))
-    const inherited = result.doc.weeks[0].quadrants[0].children[0]
 
-    expect(inherited.voided).toBe(true)
-    expect(inherited.children.map((quest) => quest.status)).toEqual(['open', 'done'])
+    expect(result.info).toMatchObject({
+      created: true,
+      source: '2026 10.26-11.1',
+      inherited: 0,
+      skippedClosed: 1,
+    })
+    expect(result.doc.weeks[0].quadrants).toHaveLength(0)
+  })
+
+  it('未关闭的顶层任务保留整棵子树，包括已关闭的子项', () => {
+    const source = makeWeek('2026 10.26-11.1', [
+      parent(
+        'p',
+        [
+          { id: 'done-leaf', title: '已完成的子项', status: 'done', note: '过程记录', children: [] },
+          parent('closed-parent', [leaf('closed-child', 'void')], '关闭的子任务'),
+          leaf('open-leaf', 'open', '还在做的'),
+        ],
+        '父任务',
+      ),
+      leaf('top-done', 'done'),
+      leaf('top-void', 'void'),
+    ])
+    const result = ensureCurrentWeek(makeDoc(source), new Date('2026-11-03T09:00:00+08:00'))
+    const created = result.doc.weeks[0]
+    const inherited = created.quadrants[0].children
+
+    expect(inherited).toHaveLength(1)
+    expect(inherited[0].title).toBe('父任务')
+    expect(inherited[0].children.map((quest) => quest.status ?? 'parent')).toEqual([
+      'done',
+      'parent',
+      'open',
+    ])
+    expect(inherited[0].children[1].children[0].status).toBe('void')
+    expect(inherited[0].children[0].note).toBe('过程记录')
+    expect(result.info.inherited).toBe(5)
+    expect(result.info.skippedClosed).toBe(2)
+  })
+
+  it('顶层全部关闭时新周为空，不继续翻更早的周', () => {
+    const doc = makeDoc(
+      makeWeek('2026 10.26-11.1', [leaf('a', 'done'), parent('p', [leaf('b', 'void')])]),
+      makeWeek('2026 10.19-10.25', [leaf('older', 'open')]),
+    )
+    const result = ensureCurrentWeek(doc, new Date('2026-11-03T09:00:00+08:00'))
+
+    expect(result.info).toMatchObject({
+      created: true,
+      source: '2026 10.26-11.1',
+      inherited: 0,
+      skippedClosed: 2,
+    })
+    expect(result.doc.weeks[0].quadrants).toHaveLength(0)
+  })
+
+  it('顶层父任务的子项全部完成时整棵不继承', () => {
+    const source = makeWeek('2026 10.26-11.1', [
+      parent('p', [leaf('a', 'done'), leaf('b', 'done')]),
+      leaf('kept', 'open'),
+    ])
+    const result = ensureCurrentWeek(makeDoc(source), new Date('2026-11-03T09:00:00+08:00'))
+    const created = result.doc.weeks[0]
+
+    expect(created.quadrants[0].children.map((quest) => quest.title)).toEqual(['kept'])
+    expect(result.info).toMatchObject({
+      created: true,
+      source: '2026 10.26-11.1',
+      inherited: 1,
+      skippedClosed: 1,
+    })
   })
 
   it('复盘不继承', () => {

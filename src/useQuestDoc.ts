@@ -305,19 +305,27 @@ export function useQuestDoc() {
         if (!response.ok) throw new Error(`HTTP ${response.status}`)
         const payload = (await response.json()) as {
           doc: QuestDoc
-          rollover: { created: boolean; label: string; source: string | null; inherited: number; skippedHolidays: number }
+          rollover: {
+            created: boolean
+            label: string
+            source: string | null
+            inherited: number
+            skippedClosed: number
+            skippedHolidays: number
+          }
           revision: string
         }
         const info = payload.rollover
         let text: string | null = null
         if (info.created) {
-          const base = !info.source
-            ? '本周已建立，之前没有可继承的事项'
-            : info.inherited > 0
-              ? `本周已从 ${info.source} 周继承 ${info.inherited} 项`
-              : `本周已从 ${info.source} 周建立，那一周没有任务`
-          const skipped = info.skippedHolidays > 0 ? `，跳过 ${info.skippedHolidays} 个假期周` : ''
-          text = `${base}${skipped}`
+          const parts: string[] = []
+          if (!info.source) parts.push('本周已建立，之前没有可继承的事项')
+          else if (info.inherited > 0) parts.push(`本周已从 ${info.source} 周继承 ${info.inherited} 项`)
+          else if (info.skippedClosed > 0) parts.push(`本周已从 ${info.source} 周建立`)
+          else parts.push(`本周已从 ${info.source} 周建立，那一周没有任务`)
+          if (info.skippedClosed > 0) parts.push(`已关闭的 ${info.skippedClosed} 项不再带入`)
+          if (info.skippedHolidays > 0) parts.push(`跳过 ${info.skippedHolidays} 个假期周`)
+          text = parts.join('，')
         }
         loaded = { doc: payload.doc, revision: payload.revision, notice: text }
       } catch (cause) {
@@ -384,7 +392,14 @@ export function useQuestDoc() {
         const response = await fetch('/api/rollover', { method: 'POST' })
         if (!response.ok) return
         const payload = (await response.json()) as {
-          rollover: { created: boolean; label: string; source: string | null; inherited: number; skippedHolidays: number }
+          rollover: {
+            created: boolean
+            label: string
+            source: string | null
+            inherited: number
+            skippedClosed: number
+            skippedHolidays: number
+          }
           revision: string
         }
         const outcome = weekCheckOutcome({
@@ -403,10 +418,13 @@ export function useQuestDoc() {
         if (outcome === 'created') {
           const info = payload.rollover
           const base = info.source
-            ? `新的一周（${info.label}）已建立，从 ${info.source} 继承 ${info.inherited} 项`
+            ? info.inherited > 0
+              ? `新的一周（${info.label}）已建立，从 ${info.source} 继承 ${info.inherited} 项`
+              : `新的一周（${info.label}）已建立，源周没有可继承的任务`
             : `新的一周（${info.label}）已建立，没有可继承的事项`
+          const closed = info.skippedClosed > 0 ? `，已关闭的 ${info.skippedClosed} 项不再带入` : ''
           const skipped = info.skippedHolidays > 0 ? `，跳过 ${info.skippedHolidays} 个假期周` : ''
-          block('week', `${base}${skipped}。重新载入后继续。`)
+          block('week', `${base}${closed}${skipped}。重新载入后继续。`)
           return
         }
         if (outcome === 'conflict') {
