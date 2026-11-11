@@ -227,7 +227,7 @@ try {
 
   // 改标题
   const row = page.locator(`li[data-quest-id="${created.id}"]`)
-  const title = row.locator(':scope > p > textarea.quest-title').first()
+  const title = row.locator(':scope > p textarea.quest-title').first()
   await title.click()
   await title.type('E2E 标题')
   await page.waitForTimeout(1_400)
@@ -624,8 +624,58 @@ try {
   await waitFocused(afterHolidayIds[2][0], '跳过假期周后的下一条')
   assert.equal(await focusedQuestId(), afterHolidayIds[2][0], '↓ 应跳过不渲染的假期周任务')
 
+  // 链接展示：失焦后 URL 变成可点击链接，聚焦后恢复纯文本编辑
+  const linkRow = page.locator('li[data-quest-id]').first()
+  const linkTitle = linkRow.locator('textarea.quest-title').first()
+  const linkUrl = `${BASE}/api/doc`
+  const secondUrl = 'https://example.com/other'
+  const linkText = `链接测试 ${linkUrl} 另一个 ${secondUrl}`
+  await linkTitle.fill(linkText)
+  await page.keyboard.press('Escape')
+  const links = linkRow.locator('.link-field-view a')
+  await links.first().waitFor()
+  assert.equal(await links.count(), 2, '多个链接应分别渲染')
+  const link = links.first()
+  assert.equal(await link.getAttribute('href'), linkUrl, '链接 href 应指向 URL')
+  assert.equal(await link.getAttribute('target'), '_blank', '链接应在新标签页打开')
+  assert.equal(await links.nth(1).getAttribute('href'), secondUrl, '第二个链接 href 应正确')
+
+  const popupPromise = page.waitForEvent('popup')
+  await link.click()
+  const popup = await popupPromise
+  await popup.waitForLoadState('domcontentloaded')
+  assert.equal(popup.url(), linkUrl, '点击链接应打开目标地址')
+  await popup.close()
+
+  await linkTitle.focus()
+  assert.equal(await linkRow.locator('.link-field-view').count(), 0, '聚焦后不应保留链接展示层')
+  assert.equal(await linkTitle.inputValue(), linkText, '编辑时仍是原始纯文本')
+  await waitData((doc) => allQuests(doc).some((quest) => quest.title === linkText), '链接标题落盘')
+
+  await linkTitle.press('Escape')
+  await linkRow.locator('.link-field-view').waitFor()
+  await linkTitle.click({ position: { x: 4, y: 8 } })
+  assert.equal(await linkRow.locator('.link-field-view').count(), 0, '点非链接文字应进入编辑')
+  assert.equal(
+    await focusedQuestId(),
+    await linkRow.getAttribute('data-quest-id'),
+    '点非链接文字应聚焦标题',
+  )
+
+  // 任务备注同样支持链接展示
+  const linkNote = childRow.locator('textarea.note-field')
+  const noteText = `备注链接 ${linkUrl}`
+  await linkNote.fill(noteText)
+  await linkNote.evaluate((element) => (element as HTMLTextAreaElement).blur())
+  const noteLink = childRow.locator('.link-field-view a').first()
+  await noteLink.waitFor()
+  assert.equal(await noteLink.getAttribute('href'), linkUrl, '备注里的链接 href 应正确')
+  await linkNote.focus()
+  assert.equal(await childRow.locator('.link-field-view').count(), 0, '备注聚焦后应隐藏链接展示层')
+  await waitData((doc) => allQuests(doc).some((quest) => quest.note === noteText), '备注链接落盘')
+
   assert.deepEqual(errors, [], '页面不应有运行时错误')
-  console.log('e2e: 标题/Enter/Tab/勾选/备注/周标题备注/删除撤销/保存/周跳转/回到顶部/上下键/单行标题/假期周跳过 全部通过')
+  console.log('e2e: 标题/Enter/Tab/勾选/备注/周标题备注/删除撤销/保存/周跳转/回到顶部/上下键/单行标题/假期周跳过/链接 全部通过')
 } finally {
   // 服务启动超时、浏览器崩溃、spawn 失败等路径也走这里：先确认进程退出，再删临时目录
   await browser?.close().catch(() => undefined)

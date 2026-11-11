@@ -20,6 +20,7 @@ import {
 } from './model/ops'
 import { QUADRANT_KEYS, QUADRANT_TITLES } from './model/types'
 import type { Quadrant, QuadrantKey, Quest, QuestDoc, Week } from './model/types'
+import { LinkTextField } from './LinkTextField'
 import { useQuestDoc } from './useQuestDoc'
 
 type Store = ReturnType<typeof useQuestDoc>
@@ -777,21 +778,22 @@ function QuestRow({
         >
           <span className="quest-check-mark">{mark}</span>
         </button>
-        <textarea
-          ref={titleRef}
+        <LinkTextField
+          textareaRef={titleRef}
           className="quest-title"
+          wrapperClassName="quest-title-wrap"
           rows={1}
           value={quest.title}
           placeholder="新任务"
           spellCheck={false}
-          onChange={(event) =>
-            store.run((doc) => setTitle(doc, weekId, quest.id, event.target.value), {
+          onValueChange={(value) =>
+            store.run((doc) => setTitle(doc, weekId, quest.id, value), {
               coalesceKey: `title:${quest.id}`,
               focusId: quest.id,
             })
           }
           onKeyDown={onTitleKeyDown}
-          aria-label="任务标题"
+          ariaLabel="任务标题"
         />
         <span className="quest-tail">
           {progress ? (
@@ -873,21 +875,21 @@ function QuestRow({
 
       {noteVisible ? (
         <p className="quest-note-field">
-          <textarea
-            ref={noteRef}
+          <LinkTextField
+            textareaRef={noteRef}
             className="note-field"
             rows={1}
             value={quest.note ?? ''}
             placeholder="备注"
             spellCheck={false}
-            onChange={(event) =>
-              store.run((doc) => setNote(doc, weekId, quest.id, event.target.value), {
+            onValueChange={(value) =>
+              store.run((doc) => setNote(doc, weekId, quest.id, value), {
                 coalesceKey: `note:${quest.id}`,
                 focusId: quest.id,
               })
             }
             onBlur={() => setNoteOpen(false)}
-            aria-label="备注"
+            ariaLabel="备注"
           />
         </p>
       ) : null}

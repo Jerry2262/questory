@@ -125,3 +125,52 @@
   font: inherit;
   cursor: pointer;
 }
+
+/* 链接展示层：失焦时把纯文本里的 http(s) URL 渲染成可点击链接，聚焦后隐藏 */
+.link-field {
+  position: relative;
+  display: block;
+}
+
+.link-field > textarea {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 100%;
+}
+
+.tree li > p:first-of-type > .quest-title-wrap {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.link-field-view {
+  position: absolute;
+  inset: 0;
+  font: inherit;
+  line-height: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+
+.link-field-view a {
+  position: relative;
+  z-index: 2;
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.link-field > textarea.is-mirrored {
+  color: transparent;
+}
+
+.tree .note-field {
+  overflow-wrap: anywhere;
+}
