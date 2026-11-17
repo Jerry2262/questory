@@ -1,56 +1,76 @@
 import { describe, expect, it } from 'vitest'
 
-import { progressOf, statusOf } from './derive'
-import type { Quest, QuestStatus } from './types'
+import { progressOf, stateOf } from './derive'
+import type { Quest } from './types'
 
-const leaf = (id: string, status: QuestStatus): Quest => ({ id, title: id, status, children: [] })
+const leaf = (id: string, done = false, voided = false, title = id): Quest => ({
+  id,
+  title,
+  done,
+  voided,
+  children: [],
+})
 
-const parent = (id: string, children: Quest[]): Quest => ({ id, title: id, children })
+const parent = (id: string, children: Quest[], title = id): Quest => ({
+  id,
+  title,
+  children,
+})
 
-describe('父状态推导', () => {
+describe('两布尔状态与父任务归约', () => {
   it('有未完成子任务时父未完成', () => {
-    expect(statusOf(parent('A', [leaf('1', 'done'), leaf('2', 'done'), leaf('3', 'open')]))).toBe('open')
+    expect(stateOf(parent('A', [leaf('1', true), leaf('2', true), leaf('3')]))).toEqual({
+      done: false,
+      voided: false,
+    })
   })
 
-  it('没有未完成、至少一个完成时父完成', () => {
-    expect(statusOf(parent('A', [leaf('1', 'done'), leaf('2', 'void')]))).toBe('done')
+  it('存在完成子项且其余子项都已关闭时父完成', () => {
+    expect(stateOf(parent('A', [leaf('1', true), leaf('2', false, true)]))).toEqual({
+      done: true,
+      voided: false,
+    })
   })
 
-  it('子任务全失效时父失效', () => {
-    expect(statusOf(parent('A', [leaf('1', 'void'), leaf('2', 'void')]))).toBe('void')
+  it('没有完成子项时，全部作废的父任务不算完成', () => {
+    expect(stateOf(parent('A', [leaf('1', false, true), leaf('2', false, true)]))).toEqual({
+      done: false,
+      voided: true,
+    })
   })
 
-  it('多层嵌套一路推导到最里层', () => {
-    const tree = parent('A', [parent('B', [leaf('1', 'done'), leaf('2', 'open')]), leaf('3', 'done')])
-    expect(statusOf(tree)).toBe('open')
-    expect(statusOf(tree.children[0])).toBe('open')
+  it('全部作废且存在完成子项时父任务完成 + 作废', () => {
+    expect(stateOf(parent('A', [leaf('1', true, true), leaf('2', false, true)]))).toEqual({
+      done: true,
+      voided: true,
+    })
   })
 
-  it('叶子任务没有名字里的 status 时按未完成算', () => {
-    expect(statusOf({ id: 'x', title: 'x', children: [] })).toBe('open')
+  it('多层嵌套逐层归约', () => {
+    const tree = parent('A', [parent('B', [leaf('1', true), leaf('2')]), leaf('3', true)])
+    expect(stateOf(tree)).toEqual({ done: false, voided: false })
+    expect(stateOf(tree.children[0])).toEqual({ done: false, voided: false })
   })
 
-  it('父任务显式作废时整条失效，子任务状态保留', () => {
-    const quest = { ...parent('A', [leaf('1', 'open'), leaf('2', 'done')]), voided: true }
-    expect(statusOf(quest)).toBe('void')
-    expect(quest.children.map(statusOf)).toEqual(['open', 'done'])
-    expect(statusOf({ ...quest, voided: false })).toBe('open')
+  it('缺省字段按 false 读取', () => {
+    expect(stateOf({ id: 'x', title: 'x', children: [] })).toEqual({ done: false, voided: false })
   })
 
   it('删除最后一个未完成子任务后父自动完成', () => {
-    const quest = parent('A', [leaf('1', 'done'), leaf('2', 'open')])
-    expect(statusOf(quest)).toBe('open')
+    const quest = parent('A', [leaf('1', true), leaf('2')])
+    expect(stateOf(quest)).toEqual({ done: false, voided: false })
     quest.children.pop()
-    expect(statusOf(quest)).toBe('done')
+    expect(stateOf(quest)).toEqual({ done: true, voided: false })
   })
 })
 
 describe('父任务进度', () => {
-  it('只统计叶子，嵌套层会摊平', () => {
+  it('只统计叶子，作废优先于完成计数', () => {
     const tree = parent('A', [
-      parent('B', [leaf('1', 'done'), leaf('2', 'open')]),
-      leaf('3', 'void'),
+      parent('B', [leaf('1', true), leaf('2')]),
+      leaf('3', false, true),
+      leaf('4', true, true),
     ])
-    expect(progressOf(tree)).toEqual({ done: 1, open: 1, void: 1, total: 3 })
+    expect(progressOf(tree)).toEqual({ done: 1, open: 1, void: 2, total: 4 })
   })
 })

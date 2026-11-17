@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import type { QuestDoc } from './types'
 import { validateQuestDoc } from './validate'
 
-/** 真实数据不进仓库：本地存在时顺手校验一遍，全新 clone 上跳过 */
+/** 真实数据不进仓库：本地存在时顺手校验，全新 clone 上跳过 */
 const LIVE_DATA = new URL('../../data/quests.json', import.meta.url)
 const liveDoc: QuestDoc | null = existsSync(LIVE_DATA)
   ? (JSON.parse(readFileSync(LIVE_DATA, 'utf8')) as QuestDoc)
@@ -22,7 +22,7 @@ const makeDoc = (): QuestDoc => ({
       quadrants: [
         {
           key: 'urgent-important',
-          children: [{ id: 'q-1', title: '任务', status: 'open', children: [] }],
+          children: [{ id: 'q-1', title: '任务', done: false, voided: false, children: [] }],
         },
       ],
     },
@@ -51,7 +51,8 @@ describe('validateQuestDoc', () => {
     doc.weeks[0].quadrants[0].children.push({
       id: 'q-1',
       title: '重复',
-      status: 'open',
+      done: false,
+      voided: false,
       children: [],
     })
     expect(validateQuestDoc(doc)).toContainEqual({
@@ -60,58 +61,39 @@ describe('validateQuestDoc', () => {
     })
   })
 
-  it('父任务不能存 status', () => {
+  it('叶子必须同时有 done 和 voided 两个布尔', () => {
     const doc = makeDoc()
-    doc.weeks[0].quadrants[0].children = [
-      {
-        id: 'p',
-        title: '父',
-        status: 'open',
-        children: [{ id: 'c', title: '子', status: 'done', children: [] }],
-      },
-    ]
-    expect(validateQuestDoc(doc)).toContainEqual({
-      path: 'weeks[0].quadrants[0].children[0].status',
-      message: '父任务不存 status，状态由子任务推导',
-    })
+    const leaf = doc.weeks[0].quadrants[0].children[0] as unknown as Record<string, unknown>
+    delete leaf.done
+    delete leaf.voided
+    expect(validateQuestDoc(doc)).toEqual([
+      { path: 'weeks[0].quadrants[0].children[0].done', message: '叶子任务必须有布尔值 done' },
+      { path: 'weeks[0].quadrants[0].children[0].voided', message: '叶子任务必须有布尔值 voided' },
+    ])
+
+    leaf.done = 'yes'
+    leaf.voided = 1
+    expect(validateQuestDoc(doc)).toEqual([
+      { path: 'weeks[0].quadrants[0].children[0].done', message: '叶子任务必须有布尔值 done' },
+      { path: 'weeks[0].quadrants[0].children[0].voided', message: '叶子任务必须有布尔值 voided' },
+    ])
   })
 
-  it('父任务可以带 voided；叶子不行；类型必须是布尔', () => {
+  it('父任务不存 done / voided', () => {
     const doc = makeDoc()
     doc.weeks[0].quadrants[0].children = [
       {
         id: 'p',
         title: '父',
+        done: true,
         voided: true,
-        children: [{ id: 'c', title: '子', status: 'done', children: [] }],
+        children: [{ id: 'c', title: '子', done: false, voided: false, children: [] }],
       },
     ]
-    expect(validateQuestDoc(doc)).toEqual([])
-
-    doc.weeks[0].quadrants[0].children[0].voided = 'yes' as never
-    expect(validateQuestDoc(doc)).toContainEqual({
-      path: 'weeks[0].quadrants[0].children[0].voided',
-      message: '必须是布尔值',
-    })
-
-    const leafDoc = makeDoc()
-    leafDoc.weeks[0].quadrants[0].children[0].voided = true
-    expect(validateQuestDoc(leafDoc)).toContainEqual({
-      path: 'weeks[0].quadrants[0].children[0].voided',
-      message: '叶子任务不能有 voided，用 status 表示状态',
-    })
-  })
-
-  it('叶子状态只允许三态；缺省按未完成处理', () => {
-    const doc = makeDoc()
-    doc.weeks[0].quadrants[0].children[0].status = 'doing' as never
-    expect(validateQuestDoc(doc)).toContainEqual({
-      path: 'weeks[0].quadrants[0].children[0].status',
-      message: '必须是 open / done / void',
-    })
-
-    delete doc.weeks[0].quadrants[0].children[0].status
-    expect(validateQuestDoc(doc)).toEqual([])
+    expect(validateQuestDoc(doc)).toEqual([
+      { path: 'weeks[0].quadrants[0].children[0].done', message: '父任务不存 done，状态由子任务归约' },
+      { path: 'weeks[0].quadrants[0].children[0].voided', message: '父任务不存 voided，状态由子任务归约' },
+    ])
   })
 
   it('周级总结必须是字符串', () => {

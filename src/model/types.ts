@@ -1,14 +1,17 @@
-export type QuestStatus = 'open' | 'done' | 'void'
+export interface TaskState {
+  done: boolean
+  voided: boolean
+}
 
 export interface Quest {
   id: string
   title: string
-  /** 只对叶子有意义；有子任务时状态由子任务推导，不写这个字段 */
-  status?: QuestStatus
+  /** 只对叶子有意义；有子任务时由子任务归约，不写这个字段 */
+  done?: boolean
+  /** 只对叶子有意义；有子任务时由子任务归约，不写这个字段 */
+  voided?: boolean
   /** 备注，纯文本，可多行 */
   note?: string
-  /** 父任务的显式作废覆盖；子任务状态保留，取消后按子任务重算 */
-  voided?: boolean
   children: Quest[]
 }
 

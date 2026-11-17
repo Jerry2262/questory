@@ -11,12 +11,11 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const isString = (value: unknown): value is string => typeof value === 'string'
 
-const isStatus = (value: unknown): value is 'open' | 'done' | 'void' =>
-  value === 'open' || value === 'done' || value === 'void'
+const isBoolean = (value: unknown): value is boolean => typeof value === 'boolean'
 
 /**
  * 写盘前的结构校验。只守住数据模型真正依赖的不变量：
- * 周/象限/任务的形状、id 唯一、父任务不存状态、普通周标签可解析。
+ * 周/象限/任务的形状、id 唯一、叶子只存 done/voided、父任务不存状态、普通周标签可解析。
  * 未知字段不拦，给以后留空间。
  */
 export function validateQuestDoc(value: unknown): ValidationIssue[] {
@@ -48,23 +47,21 @@ export function validateQuestDoc(value: unknown): ValidationIssue[] {
 
     if (!isString(quest.title)) add(`${path}.title`, '必须是字符串')
     if (quest.note !== undefined && !isString(quest.note)) add(`${path}.note`, '必须是字符串')
-    if (quest.voided !== undefined && typeof quest.voided !== 'boolean') {
-      add(`${path}.voided`, '必须是布尔值')
-    }
     if (!Array.isArray(quest.children)) {
       add(`${path}.children`, '必须是数组')
       return
     }
 
     if (quest.children.length === 0) {
+      if (!isBoolean(quest.done)) add(`${path}.done`, '叶子任务必须有布尔值 done')
+      if (!isBoolean(quest.voided)) add(`${path}.voided`, '叶子任务必须有布尔值 voided')
+    } else {
+      if (quest.done !== undefined) {
+        add(`${path}.done`, '父任务不存 done，状态由子任务归约')
+      }
       if (quest.voided !== undefined) {
-        add(`${path}.voided`, '叶子任务不能有 voided，用 status 表示状态')
+        add(`${path}.voided`, '父任务不存 voided，状态由子任务归约')
       }
-      if (quest.status !== undefined && !isStatus(quest.status)) {
-        add(`${path}.status`, '必须是 open / done / void')
-      }
-    } else if (quest.status !== undefined) {
-      add(`${path}.status`, '父任务不存 status，状态由子任务推导')
     }
 
     quest.children.forEach((child, index) => walkQuest(child, `${path}.children[${index}]`))

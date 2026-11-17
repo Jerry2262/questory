@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { progressOf, statusOf } from './derive'
+
+import { progressOf, stateOf } from './derive'
 import {
   addSibling,
   addTask,
@@ -12,11 +13,11 @@ import {
   outdentTask,
   setHeader,
   setNote,
-  setWeekLabel,
   setReview,
   setTitle,
   setVoid,
   setWeekKind,
+  setWeekLabel,
   setWeekNote,
   toggleStatus,
 } from './ops'
@@ -42,11 +43,11 @@ function makeDoc(): QuestDoc {
                 id: 'a',
                 title: 'A',
                 children: [
-                  { id: 'a1', title: 'A1', status: 'open', note: 'n', children: [] },
-                  { id: 'a2', title: 'A2', status: 'done', children: [] },
+                  { id: 'a1', title: 'A1', done: false, voided: false, note: 'n', children: [] },
+                  { id: 'a2', title: 'A2', done: true, voided: false, children: [] },
                 ],
               },
-              { id: 'b', title: 'B', status: 'open', children: [] },
+              { id: 'b', title: 'B', done: false, voided: false, children: [] },
             ],
           },
           { key: 'important', children: [] },
@@ -125,7 +126,7 @@ describe('missing quadrants', () => {
 })
 
 describe('task tree operations', () => {
-  it('adds to the end of an empty quadrant and keeps the review', () => {
+  it('adds a new leaf to the end of an empty quadrant', () => {
     const doc = makeDoc()
     const result = addTask(doc, 'w2', 'important')
     expect(result).not.toBeNull()
@@ -133,7 +134,11 @@ describe('task tree operations', () => {
     checked(next)
     expect(next.weeks[0].review).toBe('经验')
     expect(next.weeks[0].quadrants[1].children).toHaveLength(1)
-    expect(next.weeks[0].quadrants[1].children[0].title).toBe('')
+    expect(next.weeks[0].quadrants[1].children[0]).toMatchObject({
+      title: '',
+      done: false,
+      voided: false,
+    })
     expect(result!.id).toBe(next.weeks[0].quadrants[1].children[0].id)
     expect(countQuests(next.weeks[0])).toBe(5)
     expect(doc.weeks[0].quadrants[1].children).toHaveLength(0)
@@ -165,7 +170,6 @@ describe('task tree operations', () => {
     const holiday = setWeekKind(doc, 'w2', 'holiday')!
     const invalid = setWeekLabel(holiday.doc, 'w2', '随便写的')!
     expect(setWeekKind(invalid.doc, 'w2', 'normal')).toBeNull()
-    // 标签改回日期区间后可以恢复
     const fixed = setWeekLabel(invalid.doc, 'w2', '2026 10.26-11.1')!
     expect(setWeekKind(fixed.doc, 'w2', 'normal')).not.toBeNull()
   })
@@ -180,6 +184,8 @@ describe('task tree operations', () => {
       'a2',
       'b',
     ])
+    expect(indented.doc.weeks[0].quadrants[0].children[0]).not.toHaveProperty('done')
+    expect(indented.doc.weeks[0].quadrants[0].children[0]).not.toHaveProperty('voided')
     expect(indentTask(doc, 'w2', 'a')).toBeNull()
 
     const outdented = outdentTask(doc, 'w2', 'a1')!
@@ -189,37 +195,56 @@ describe('task tree operations', () => {
     expect(outdentTask(doc, 'w2', 'a')).toBeNull()
   })
 
-  it('toggles only leaves; a void leaf needs the menu', () => {
+  it('toggles only non-void leaves', () => {
     const doc = makeDoc()
     const done = toggleStatus(doc, 'w2', 'a1')!
     checked(done.doc)
-    expect(done.status).toBe('done')
-    expect(statusOf(done.doc.weeks[0].quadrants[0].children[0])).toBe('done')
+    expect(done.done).toBe(true)
+    expect(findQuest(done.doc, 'w2', 'a1')!.quest).toMatchObject({ done: true, voided: false })
 
     expect(toggleStatus(doc, 'w2', 'a')).toBeNull()
 
     const voided = setVoid(doc, 'w2', 'a1', true)!
     checked(voided.doc)
-    expect(voided.doc.weeks[0].quadrants[0].children[0].children[0].status).toBe('void')
+    expect(findQuest(voided.doc, 'w2', 'a1')!.quest).toMatchObject({ done: false, voided: true })
     expect(toggleStatus(voided.doc, 'w2', 'a1')).toBeNull()
 
     const restored = setVoid(voided.doc, 'w2', 'a1', false)!
     checked(restored.doc)
-    expect(restored.doc.weeks[0].quadrants[0].children[0].children[0].status).toBe('open')
+    expect(findQuest(restored.doc, 'w2', 'a1')!.quest).toMatchObject({ done: false, voided: false })
   })
 
-  it('voids a parent as an override and restores derivation', () => {
+  it('作废完成叶子时保留完成，恢复后回到完成', () => {
+    const done = toggleStatus(makeDoc(), 'w2', 'a1')!
+    const voided = setVoid(done.doc, 'w2', 'a1', true)!
+    checked(voided.doc)
+    expect(findQuest(voided.doc, 'w2', 'a1')!.quest).toMatchObject({ done: true, voided: true })
+
+    const restored = setVoid(voided.doc, 'w2', 'a1', false)!
+    checked(restored.doc)
+    expect(findQuest(restored.doc, 'w2', 'a1')!.quest).toMatchObject({ done: true, voided: false })
+  })
+
+  it('voids a parent recursively and restores every leaf', () => {
     const doc = makeDoc()
     const voided = setVoid(doc, 'w2', 'a', true)!
     checked(voided.doc)
-    expect(voided.doc.weeks[0].quadrants[0].children[0].voided).toBe(true)
-    expect(statusOf(voided.doc.weeks[0].quadrants[0].children[0])).toBe('void')
-    expect(voided.doc.weeks[0].quadrants[0].children[0].children.map((q) => q.title)).toEqual(['A1', 'A2'])
+    const parent = findQuest(voided.doc, 'w2', 'a')!.quest
+    expect(parent).not.toHaveProperty('voided')
+    expect(parent.children.map((quest) => [quest.done, quest.voided])).toEqual([
+      [false, true],
+      [true, true],
+    ])
+    expect(stateOf(parent)).toEqual({ done: true, voided: true })
 
     const restored = setVoid(voided.doc, 'w2', 'a', false)!
     checked(restored.doc)
-    expect(restored.doc.weeks[0].quadrants[0].children[0].voided).toBeUndefined()
-    expect(statusOf(restored.doc.weeks[0].quadrants[0].children[0])).toBe('open')
+    const back = findQuest(restored.doc, 'w2', 'a')!.quest
+    expect(back.children.map((quest) => [quest.done, quest.voided])).toEqual([
+      [false, false],
+      [true, false],
+    ])
+    expect(stateOf(back)).toEqual({ done: false, voided: false })
   })
 
   it('deletes a task with its subtree and returns the removed quest', () => {
@@ -232,20 +257,19 @@ describe('task tree operations', () => {
     expect(doc.weeks[0].quadrants[0].children).toHaveLength(2)
   })
 
-  it('deleting the last child makes the parent a leaf and clears parent void', () => {
+  it('deleting the last child turns the parent into a leaf with its state', () => {
     const doc = makeDoc()
     const withVoid = setVoid(doc, 'w2', 'a', true)!
     const one = deleteTask(withVoid.doc, 'w2', 'a1')!
     const two = deleteTask(one.doc, 'w2', 'a2')!
     checked(two.doc)
-    const parent = two.doc.weeks[0].quadrants[0].children[0]
+    const parent = findQuest(two.doc, 'w2', 'a')!.quest
     expect(parent.children).toHaveLength(0)
-    expect(parent.voided).toBeUndefined()
-    expect(parent.status).toBeUndefined()
-    expect(statusOf(parent)).toBe('open')
+    expect(parent).toMatchObject({ done: true, voided: true })
+    expect(stateOf(parent)).toEqual({ done: true, voided: true })
   })
 
-  it('moves a subtree to another quadrant; same quadrant is a no-op', () => {
+  it('moves only a top-level subtree to another quadrant; same quadrant is a no-op', () => {
     const doc = makeDoc()
     const moved = moveTask(doc, 'w2', 'a', 'important')!
     checked(moved.doc)
@@ -254,6 +278,7 @@ describe('task tree operations', () => {
     expect(moved.doc.weeks[0].quadrants[0].children.map((q) => q.id)).toEqual(['b'])
     expect(moved.doc.weeks[0].quadrants[1].children[0].children).toHaveLength(2)
     expect(moveTask(doc, 'w2', 'b', 'urgent-important')).toBeNull()
+    expect(moveTask(doc, 'w2', 'a1', 'important')).toBeNull()
   })
 
   it('sets title/note/review/header and clears empty note/review', () => {
@@ -326,10 +351,10 @@ describe('task tree operations', () => {
     expect(JSON.stringify(doc)).toBe(snapshot)
   })
 
-  it('keeps counts and derived status in sync', () => {
+  it('keeps counts and derived state in sync', () => {
     const doc = makeDoc()
     expect(countQuests(doc.weeks[0])).toBe(4)
-    expect(statusOf(doc.weeks[0].quadrants[0].children[0])).toBe('open')
+    expect(stateOf(doc.weeks[0].quadrants[0].children[0])).toEqual({ done: false, voided: false })
     expect(progressOf(doc.weeks[0].quadrants[0].children[0])).toEqual({
       done: 1,
       open: 1,
@@ -339,20 +364,54 @@ describe('task tree operations', () => {
   })
 })
 
-// 叶子与父任务的互相转换必须维护结构不变量：父任务不写 status，叶子不写 voided。
-// 曾经漏掉这几处，用户「加任务后 Tab 缩进」就会产出非法文档，被写盘校验拒绝并锁住界面。
-describe('叶子 ↔ 父任务转换', () => {
-  it('Tab 缩进到叶子后面：前一个任务变父任务并清掉 status', () => {
+describe('结构转换与作废限制', () => {
+  it('Tab 缩进到叶子后面：前一个任务变父任务并清掉状态字段', () => {
     const doc = makeDoc()
     const withSibling = addSibling(doc, 'w2', 'b')!
     const indented = indentTask(withSibling.doc, 'w2', withSibling.id)!
     checked(indented.doc)
     const previous = findQuest(indented.doc, 'w2', 'b')!.quest
     expect(previous.children.map((quest) => quest.id)).toEqual([withSibling.id])
-    expect(previous.status).toBeUndefined()
+    expect(previous).not.toHaveProperty('done')
+    expect(previous).not.toHaveProperty('voided')
   })
 
-  it('升级最后一个子任务：父任务退回叶子并清掉 voided', () => {
+  it('作废目标下不能缩进', () => {
+    const doc = makeDoc()
+    const voided = setVoid(doc, 'w2', 'b', true)!
+    const withSibling = addSibling(voided.doc, 'w2', 'b')!
+    expect(indentTask(withSibling.doc, 'w2', withSibling.id)).toBeNull()
+    expect(findQuest(withSibling.doc, 'w2', withSibling.id)!.parent).toBeNull()
+  })
+
+  it('作废父任务下不能新增同级任务', () => {
+    const doc = makeDoc()
+    const voided = setVoid(doc, 'w2', 'a', true)!
+    expect(addSibling(voided.doc, 'w2', 'a1')).toBeNull()
+    expect(addTask(voided.doc, 'w2', 'urgent-important', { afterId: 'a1' })).toBeNull()
+  })
+
+  it('完成或未完成的父任务仍可新增；新增后父任务重新归约', () => {
+    const doneChild = toggleStatus(makeDoc(), 'w2', 'a1')!
+    expect(stateOf(findQuest(doneChild.doc, 'w2', 'a')!.quest)).toEqual({
+      done: true,
+      voided: false,
+    })
+
+    const added = addSibling(doneChild.doc, 'w2', 'a1')!
+    checked(added.doc)
+    expect(findQuest(added.doc, 'w2', 'a')!.quest.children).toHaveLength(3)
+    expect(stateOf(findQuest(added.doc, 'w2', 'a')!.quest)).toEqual({
+      done: false,
+      voided: false,
+    })
+    expect(findQuest(added.doc, 'w2', added.id)!.quest).toMatchObject({
+      done: false,
+      voided: false,
+    })
+  })
+
+  it('升级最后一个子任务：父任务退回叶子并保留作废状态', () => {
     const doc = makeDoc()
     const voided = setVoid(doc, 'w2', 'a', true)!
     const onlyChild = deleteTask(voided.doc, 'w2', 'a2')!
@@ -360,18 +419,6 @@ describe('叶子 ↔ 父任务转换', () => {
     checked(outdented.doc)
     const parent = findQuest(outdented.doc, 'w2', 'a')!.quest
     expect(parent.children).toHaveLength(0)
-    expect(parent.voided).toBeUndefined()
+    expect(parent).toMatchObject({ done: false, voided: true })
   })
-
-  it('移走最后一个子任务：父任务退回叶子并清掉 voided', () => {
-    const doc = makeDoc()
-    const voided = setVoid(doc, 'w2', 'a', true)!
-    const onlyChild = deleteTask(voided.doc, 'w2', 'a2')!
-    const moved = moveTask(onlyChild.doc, 'w2', 'a1', 'important')!
-    checked(moved.doc)
-    const parent = findQuest(moved.doc, 'w2', 'a')!.quest
-    expect(parent.children).toHaveLength(0)
-    expect(parent.voided).toBeUndefined()
-  })
-
 })

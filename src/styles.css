@@ -339,7 +339,7 @@ body {
   color: #5c5c58;
 }
 
-/* 三态勾选框：负外边距让它挂进左侧留白，正文换行后仍然对齐 */
+/* 两个布尔一个勾选框：done 决定勾选，voided 决定可用性 */
 .quest-check {
   display: inline-block;
   width: 1em;
@@ -354,12 +354,8 @@ body {
   color: var(--faint);
 }
 
-.quest-check[data-qstatus='done'] .quest-check-mark {
+.quest-check[data-done='true'] .quest-check-mark {
   color: var(--accent);
-}
-
-.quest-check[data-qstatus='void'] .quest-check-mark {
-  color: var(--faint);
 }
 
 .quest-tail {
@@ -527,13 +523,13 @@ body {
   white-space: nowrap;
 }
 
-/* 任务标题按状态弱化：完成变灰，失效加删除线 */
-.tree li:has(> p > .quest-check[data-qstatus='done']) > p {
+/* 任务标题按状态弱化：关闭（done 或 voided）变灰；作废再加删除线 */
+.tree li[data-closed='true'] > p {
   color: #6f6f6a;
 }
 
-.tree li:has(> p > .quest-check[data-qstatus='void']) > p:first-of-type {
-  color: var(--faint);
+/* 作废行整体画删除线，左侧勾选框也一起穿过；勾选符号本身不变 */
+.tree li[data-voided='true'] > p {
   text-decoration: line-through;
 }
 
@@ -605,8 +601,12 @@ body {
   font-style: normal;
 }
 
-.legend-mark[data-qstatus='done'] {
+.legend-mark[data-done='true'] {
   color: var(--accent);
+}
+
+.legend-void {
+  text-decoration: line-through;
 }
 
 /* 删除后的可见撤销；下一次编辑或 8 秒后收起 */

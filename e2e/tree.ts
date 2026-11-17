@@ -40,7 +40,8 @@ function seedDoc(): QuestDoc {
           children: Array.from({ length: 8 }, (_, task) => ({
             id: `e2e-task-${index}-${task}`,
             title: `示例任务 ${index}-${task}`,
-            status: 'open' as const,
+            done: false,
+            voided: false,
             children: [],
           })),
         },
@@ -49,7 +50,8 @@ function seedDoc(): QuestDoc {
           children: Array.from({ length: 3 }, (_, task) => ({
             id: `e2e-urgent-${index}-${task}`,
             title: `紧急示例 ${index}-${task}`,
-            status: 'open' as const,
+            done: false,
+            voided: false,
             children: [],
           })),
         },
@@ -223,7 +225,8 @@ try {
   const created = allQuests(read()).find((quest) => !idsBefore.has(quest.id))
   assert.ok(created, '空象限的「+ 添加任务」应建出象限并加一条')
   assert.equal(created.title, '', '新建任务标题应为空')
-  assert.equal(created.status, 'open', '新建叶子应为未完成')
+  assert.equal(created.done, false, '新建叶子应为未完成')
+  assert.equal(created.voided, false, '新建叶子应为未作废')
 
   // 改标题
   const row = page.locator(`li[data-quest-id="${created.id}"]`)
@@ -245,12 +248,13 @@ try {
   const parent = find(read(), 'E2E 标题')
   assert.ok(parent, '缩进后父任务应仍在')
   assert.ok(parent?.children?.some((quest) => quest.id === child.id), 'Tab 应把这条件缩进为子任务')
-  assert.equal(parent?.status, undefined, '叶子变父任务后不应残留 status（否则写盘校验会拒绝）')
+  assert.equal(parent?.done, undefined, '叶子变父任务后不应残留 done')
+  assert.equal(parent?.voided, undefined, '叶子变父任务后不应残留 voided')
 
   const childRow = page.locator(`li[data-quest-id="${child.id}"]`)
   await childRow.locator('.quest-check').click()
   await page.waitForTimeout(1_400)
-  assert.equal(find(read(), 'E2E 子任务')?.status, 'done', '勾选应保存为完成')
+  assert.equal(find(read(), 'E2E 子任务')?.done, true, '勾选应保存为完成')
 
   await childRow.locator('.quest-move').click()
   await page.getByRole('menuitem', { name: '添加备注' }).click()
@@ -674,8 +678,143 @@ try {
   assert.equal(await childRow.locator('.link-field-view').count(), 0, '备注聚焦后应隐藏链接展示层')
   await waitData((doc) => allQuests(doc).some((quest) => quest.note === noteText), '备注链接落盘')
 
+  // 父任务作废：整棵子树显示删除线；完成/未完成的勾选框保留各自的基础状态
+  await page.locator('section[data-quadrant="urgent-important"] > h3 .quest-add.is-current-week').first().click()
+  await page.waitForTimeout(200)
+  await page.keyboard.type('作废测试父')
+  await waitData((doc) => find(doc, '作废测试父') !== undefined, '作废测试父落盘')
+  await page.keyboard.press('Enter')
+  await page.waitForTimeout(200)
+  await page.keyboard.type('作废测试子开')
+  await waitData((doc) => find(doc, '作废测试子开') !== undefined, '作废测试子开落盘')
+  await page.keyboard.press('Tab')
+  await waitData((doc) => {
+    const parent = find(doc, '作废测试父')
+    return !!parent?.children.some((child) => child.title === '作废测试子开')
+  }, '作废测试子开缩进')
+  await page.keyboard.press('Enter')
+  await page.waitForTimeout(200)
+  await page.keyboard.type('作废测试子完')
+  await waitData((doc) => find(doc, '作废测试子完') !== undefined, '作废测试子完落盘')
+
+  const voidParent = find(read(), '作废测试父')!
+  const openChild = find(read(), '作废测试子开')!
+  const doneChild = find(read(), '作废测试子完')!
+  const voidParentRow = page.locator(`li[data-quest-id="${voidParent.id}"]`)
+  const openChildRow = page.locator(`li[data-quest-id="${openChild.id}"]`)
+  const doneChildRow = page.locator(`li[data-quest-id="${doneChild.id}"]`)
+  await doneChildRow.locator(':scope > p .quest-check').first().click()
+  await waitData((doc) => find(doc, '作废测试子完')?.done === true, '作废测试子完完成落盘')
+
+  await voidParentRow.locator(':scope > p .quest-move').first().click()
+  await voidParentRow.locator(':scope > .quest-menu').getByRole('menuitem', { name: '作废' }).click()
+  await waitData((doc) => {
+    const parent = find(doc, '作废测试父')
+    return !!parent && parent.children.length === 2 && parent.children.every((child) => child.voided)
+  }, '父任务作废落盘')
+
+  for (const [row, expectedMark] of [
+    [voidParentRow, '✓'],
+    [openChildRow, '☐'],
+    [doneChildRow, '✓'],
+  ] as const) {
+    assert.equal(await row.getAttribute('data-voided'), 'true', '整棵子树应标记作废')
+    assert.equal(await row.getAttribute('data-closed'), 'true', '关闭行应标记为灰')
+    assert.equal(
+      await row.locator(':scope > p .quest-check-mark').first().textContent(),
+      expectedMark,
+      '作废不应改变勾选框的 done 状态',
+    )
+    assert.equal(
+      await row.locator(':scope > p .quest-check').first().isDisabled(),
+      true,
+      '作废后勾选框应不可用',
+    )
+    assert.match(
+      await row
+        .locator(':scope > p')
+        .first()
+        .evaluate((element) => getComputedStyle(element).textDecorationLine),
+      /line-through/,
+      '作废应给整行画删除线',
+    )
+  }
+  const openChildSaved = find(read(), '作废测试子开')!
+  const doneChildSaved = find(read(), '作废测试子完')!
+  assert.deepEqual(
+    { done: openChildSaved.done, voided: openChildSaved.voided },
+    { done: false, voided: true },
+    '未完成子任务保留 done=false，只增加 voided',
+  )
+  assert.deepEqual(
+    { done: doneChildSaved.done, voided: doneChildSaved.voided },
+    { done: true, voided: true },
+    '已完成子任务保留 done=true，同时 voided',
+  )
+  assert.equal(find(read(), '作废测试父')?.done, undefined, '父任务不存 done')
+  assert.equal(find(read(), '作废测试父')?.voided, undefined, '父任务不存 voided')
+
+  await voidParentRow.locator(':scope > p .quest-move').first().click()
+  await voidParentRow.locator(':scope > .quest-menu').getByRole('menuitem', { name: '恢复' }).click()
+  await waitData((doc) => {
+    const parent = find(doc, '作废测试父')
+    return !!parent && parent.children.length === 2 && parent.children.every((child) => !child.voided)
+  }, '父任务恢复落盘')
+  for (const row of [voidParentRow, openChildRow, doneChildRow]) {
+    assert.equal(await row.getAttribute('data-voided'), null, '恢复后整棵子树不应再标记作废')
+  }
+  assert.equal(await voidParentRow.getAttribute('data-closed'), null, '恢复后未完成父任务不再变灰')
+  assert.equal(await openChildRow.getAttribute('data-closed'), null, '未完成子任务不是关闭行')
+  assert.equal(await doneChildRow.getAttribute('data-closed'), 'true', '已完成子任务仍是关闭行')
+  assert.equal(
+    await doneChildRow.locator(':scope > p .quest-check-mark').first().textContent(),
+    '✓',
+    '恢复后已完成子任务仍是完成',
+  )
+
+  // 只有象限顶层任务有「移动到」，子任务菜单里不出现移动入口
+  await voidParentRow.locator(':scope > p .quest-move').first().click()
+  assert.equal(
+    await voidParentRow
+      .locator(':scope > .quest-menu .quest-menu-label')
+      .filter({ hasText: '移动到' })
+      .count(),
+    1,
+    '顶层任务菜单应有移动入口',
+  )
+  await voidParentRow.locator(':scope > p .quest-move').first().click()
+
+  await openChildRow.locator(':scope > p .quest-move').first().click()
+  assert.equal(
+    await openChildRow
+      .locator(':scope > .quest-menu .quest-menu-label')
+      .filter({ hasText: '移动到' })
+      .count(),
+    0,
+    '子任务菜单不应有移动入口',
+  )
+  await openChildRow.locator(':scope > p .quest-move').first().click()
+
+  // 菜单失焦/点外部关闭
+  await voidParentRow.locator(':scope > p .quest-move').first().click()
+  await page.locator('h1').click()
+  assert.equal(
+    await voidParentRow.locator(':scope > .quest-menu').count(),
+    0,
+    '点击菜单外部后菜单应关闭',
+  )
+
+  await voidParentRow.locator(':scope > p .quest-move').first().click()
+  assert.equal(await voidParentRow.locator(':scope > .quest-menu').count(), 1, '菜单应打开')
+  await page.keyboard.press('Escape')
+  assert.equal(
+    await voidParentRow.locator(':scope > .quest-menu').count(),
+    0,
+    '按 Escape 后菜单应关闭',
+  )
+
   assert.deepEqual(errors, [], '页面不应有运行时错误')
-  console.log('e2e: 标题/Enter/Tab/勾选/备注/周标题备注/删除撤销/保存/周跳转/回到顶部/上下键/单行标题/假期周跳过/链接 全部通过')
+  console.log('e2e: 标题/Enter/Tab/勾选/备注/周标题备注/删除撤销/保存/周跳转/回到顶部/上下键/单行标题/假期周跳过/链接/作废叠加/菜单外点关闭 全部通过')
 } finally {
   // 服务启动超时、浏览器崩溃、spawn 失败等路径也走这里：先确认进程退出，再删临时目录
   await browser?.close().catch(() => undefined)

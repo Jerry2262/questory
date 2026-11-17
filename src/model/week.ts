@@ -1,10 +1,10 @@
-import { statusOf } from './derive'
+import { stateOf } from './derive'
 import { hashId } from './ids'
 import type { Quadrant, Quest, QuestDoc, Week } from './types'
 
 /**
  * 周继承：当本周缺失时，用「最后一个填过的周」把未关闭的顶层任务带过来。
- * 顶层已关闭的任务不继承；未关闭的顶层任务整棵子树（含已完成/失效的子项，作为过程上下文）保留。
+ * 顶层已关闭的任务不继承；未关闭的顶层任务整棵子树（含已完成/作废的子项，作为过程上下文）保留。
  * 不复制复盘；中间缺失的周不补空周；假期周跳过。规则见 DESIGN.md「周」。
  */
 
@@ -143,26 +143,28 @@ function uniqueId(used: Set<string>, base: string): string {
   return id
 }
 
-/** 深拷贝整棵子树：新 id、叶子状态/备注保留，父任务不写状态；关闭的子项也原样保留 */
+/** 深拷贝整棵子树：新 id、叶子 done/voided/备注保留，父任务不写状态；关闭的子项也原样保留 */
 function cloneSubtree(quest: Quest, path: (string | number)[], used: Set<string>): Quest {
   return {
     id: uniqueId(used, hashId('quest', ...path)),
     title: quest.title,
     ...(quest.children.length
-      ? quest.voided
-        ? { voided: true }
-        : {}
-      : { status: quest.status ?? 'open' }),
+      ? {}
+      : {
+          done: quest.done === true,
+          voided: quest.voided === true,
+        }),
     ...(quest.note ? { note: quest.note } : {}),
     children: quest.children.map((child, index) => cloneSubtree(child, [...path, index], used)),
   }
 }
 
-/** 只剪顶层已关闭的任务；未关闭的顶层任务整棵子树一起继承，保留执行上下文 */
+/** 只剪顶层已完成/作废的任务；未关闭的顶层任务整棵子树一起继承，保留执行上下文 */
 function cloneTopLevel(quests: Quest[], path: (string | number)[], used: Set<string>): Quest[] {
-  return quests.flatMap((quest, index) =>
-    statusOf(quest) === 'open' ? [cloneSubtree(quest, [...path, index], used)] : [],
-  )
+  return quests.flatMap((quest, index) => {
+    const state = stateOf(quest)
+    return state.done || state.voided ? [] : [cloneSubtree(quest, [...path, index], used)]
+  })
 }
 
 function inheritWeek(source: Week, label: string, used: Set<string>): Week {

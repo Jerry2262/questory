@@ -1,16 +1,10 @@
 import { current, produce } from 'immer'
 
+import { stateOf } from './derive'
 import { newId } from './ids'
 import { parseWeekLabel } from './week'
 import { QUADRANT_KEYS } from './types'
-import type {
-  Quadrant,
-  QuadrantKey,
-  Quest,
-  QuestDoc,
-  QuestStatus,
-  Week,
-} from './types'
+import type { Quadrant, QuadrantKey, Quest, QuestDoc, TaskState, Week } from './types'
 
 /**
  * 结构化任务树的唯一写入口。
@@ -18,8 +12,8 @@ import type {
  * 规则见 DESIGN.md「编辑层」：
  * - 输入 doc 不被修改，返回新 doc；UI 只渲染返回的 doc。
  * - 结构操作（增删/缩进/移动）只在这里做；标题/备注/复盘只是字符串赋值。
- * - 父任务不写 status；叶子只用 status；父任务作废用 voided。
- * - 同一状态只有一个入口：勾选框 open↔done，作废走 setVoid；
+ * - 叶子存 done + voided 两个布尔；父任务不存状态，只读取直接子任务归约。
+ * - 同一状态只有一个入口：勾选框切换 done，作废/恢复走 setVoid；
  *   标题 Enter 和「+ 添加任务」都调用 addTask。
  *
  * 实现用 Immer 的 produce：草稿上直接改，未改动的子树与旧文档共享，
@@ -104,11 +98,12 @@ export function findQuest(doc: QuestDoc, weekId: string, questId: string): Quest
 }
 
 function makeQuest(): Quest {
-  return { id: newId(), title: '', status: 'open', children: [] }
+  return { id: newId(), title: '', done: false, voided: false, children: [] }
 }
 
 /**
  * 在象限末尾（「+ 添加任务」）或某个任务后面（同级）加一条空任务。
+ * 新增只允许出现在非作废的父任务下：同级新增看目标的父任务，象限顶层永远可以。
  * 缩进成子任务走 indentTask，不在这里造子级。
  */
 export function addTask(
@@ -127,6 +122,7 @@ export function addTask(
     if (options.afterId) {
       const after = findQuestIn(week, quadrant, quadrant.children, null, options.afterId)
       if (!after) return null
+      if (after.parent && stateOf(after.parent).voided) return null
       after.siblings.splice(after.index + 1, 0, created)
     } else {
       quadrant.children.push(created)
@@ -219,70 +215,72 @@ export function setWeekNote(doc: QuestDoc, weekId: string, note: string): OpResu
   })
 }
 
-/** 叶子勾选框：open↔done。父任务、失效任务不在这里改。 */
-export function toggleStatus(doc: QuestDoc, weekId: string, questId: string): OpResult<{ status: QuestStatus }> {
+/** 叶子勾选框：只切换 done。父任务、作废任务不在这里改。 */
+export function toggleStatus(doc: QuestDoc, weekId: string, questId: string): OpResult<{ done: boolean }> {
   return edit(doc, (draft) => {
     const location = findQuest(draft, weekId, questId)
     if (!location || location.quest.children.length) return null
-    if (location.quest.status === 'void') return null
-    location.quest.status = location.quest.status === 'done' ? 'open' : 'done'
-    return { status: location.quest.status }
+    if (location.quest.voided === true) return null
+    const done = location.quest.done !== true
+    location.quest.done = done
+    return { done }
   })
 }
 
 /**
- * 菜单「作废 / 恢复」：叶子写 status=void，父任务写 voided。
- * 取消作废时叶子回到 open，父任务恢复按子任务推导。
+ * 菜单「作废 / 恢复」：对整棵子树的叶子设置 voided。
+ * 只改 voided，保留叶子的 done；父任务没有自己的状态，随后由子项归约。
  */
 export function setVoid(doc: QuestDoc, weekId: string, questId: string, voided: boolean): OpResult<{ id: string }> {
   return edit(doc, (draft) => {
     const location = findQuest(draft, weekId, questId)
     if (!location) return null
 
-    if (location.quest.children.length) {
-      if (voided) location.quest.voided = true
-      else delete location.quest.voided
-    } else {
-      delete location.quest.voided
-      location.quest.status = voided ? 'void' : 'open'
+    const setSubtreeVoid = (quest: Quest) => {
+      if (quest.children.length) quest.children.forEach(setSubtreeVoid)
+      else quest.voided = voided
     }
+    setSubtreeVoid(location.quest)
     return { id: questId }
   })
 }
 
-/**
- * 叶子 → 父任务：状态改由子任务推导，必须清掉叶子期写下的 status。
- * 漏了就会被写盘校验拒绝（父任务不存 status），界面表现为保存失败并锁住。
- */
+/** 叶子 → 父任务：状态改由子任务归约，必须清掉叶子期的两个布尔。 */
 function markParent(quest: Quest): void {
-  if (quest.children.length > 0) delete quest.status
+  if (quest.children.length > 0) {
+    delete quest.done
+    delete quest.voided
+  }
 }
 
-/** 父任务 → 叶子：voided 覆盖失去意义，清掉；status 缺省按未完成。 */
-function markLeafIfEmpty(quest: Quest): void {
-  if (quest.children.length === 0) delete quest.voided
+/** 父任务 → 叶子：保留变成叶子前的当前状态，不读取历史。 */
+function collapseLeaf(quest: Quest, state: TaskState): void {
+  if (quest.children.length > 0) return
+  quest.done = state.done
+  quest.voided = state.voided
 }
 
 /**
  * 删除一条任务（含子树），返回被删的子树供界面提示使用（撤销走历史快照）。
- * 删到父任务没有子任务时，父任务退回叶子，清掉父任务作废覆盖。
+ * 删到父任务没有子任务时，父任务退回叶子，直接继承删除前的状态。
  */
 export function deleteTask(doc: QuestDoc, weekId: string, questId: string): OpResult<{ removed: Quest }> {
   return edit(doc, (draft) => {
     const location = findQuest(draft, weekId, questId)
     if (!location) return null
 
+    const parentState = location.parent ? stateOf(location.parent) : null
     // 草稿在 produce 结束后会被收回，这里要取一份独立的普通对象
     const removed = current(location.quest) as Quest
     location.siblings.splice(location.index, 1)
 
-    if (location.parent) markLeafIfEmpty(location.parent)
+    if (location.parent && parentState) collapseLeaf(location.parent, parentState)
 
     return { removed }
   })
 }
 
-/** 菜单「移动到」：把整棵子树移到同一周另一个象限末尾。 */
+/** 菜单「移动到」：只有象限顶层任务能移动，整棵子树移到同周另一个象限末尾。 */
 export function moveTask(
   doc: QuestDoc,
   weekId: string,
@@ -291,25 +289,25 @@ export function moveTask(
 ): OpResult<{ id: string }> {
   return edit(doc, (draft) => {
     const location = findQuest(draft, weekId, questId)
-    if (!location) return null
+    if (!location || location.parent) return null
     if (targetQuadrant === location.quadrant.key) return null
     const target = ensureQuadrant(location.week, targetQuadrant)
     if (!target) return null
 
     location.siblings.splice(location.index, 1)
     target.children.push(location.quest)
-    if (location.parent) markLeafIfEmpty(location.parent)
     return { id: questId }
   })
 }
 
-/** Tab：变成前一个同级任务最后一个子任务。第一个同级不能缩进。 */
+/** Tab：变成前一个同级任务最后一个子任务。第一个同级、作废目标不能缩进。 */
 export function indentTask(doc: QuestDoc, weekId: string, questId: string): OpResult<{ id: string }> {
   return edit(doc, (draft) => {
     const location = findQuest(draft, weekId, questId)
     if (!location || location.index === 0) return null
 
     const previous = location.siblings[location.index - 1]
+    if (stateOf(previous).voided) return null
     location.siblings.splice(location.index, 1)
     previous.children.push(location.quest)
     markParent(previous)
@@ -325,9 +323,10 @@ export function outdentTask(doc: QuestDoc, weekId: string, questId: string): OpR
     const parent = findQuest(draft, weekId, location.parent.id)
     if (!parent) return null
 
+    const parentState = stateOf(parent.quest)
     location.siblings.splice(location.index, 1)
     parent.siblings.splice(parent.index + 1, 0, location.quest)
-    markLeafIfEmpty(parent.quest)
+    collapseLeaf(parent.quest, parentState)
     return { id: questId }
   })
 }

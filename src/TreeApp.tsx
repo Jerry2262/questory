@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, RefObject } from 'react'
 
-import { progressOf, statusOf } from './model/derive'
+import { progressOf, stateOf } from './model/derive'
 import {
   addSibling,
   addTask,
@@ -284,13 +284,13 @@ function PageHeader({ store }: { store: Store }) {
           <span className="legend-mark">☐</span>未完成
         </span>
         <span className="legend-item">
-          <span className="legend-mark" data-qstatus="done">
+          <span className="legend-mark" data-done="true">
             ✓
           </span>
           完成
         </span>
         <span className="legend-item">
-          <span className="legend-mark">—</span>失效
+          <span className="legend-void">作废</span>
         </span>
         <span className="legend-note">
           勾选框切换未完成/完成；作废、备注、移动、删除在行尾 ⋮ 菜单；Enter 加下一条，Tab/Shift+Tab 缩进，↑/↓ 切换任务
@@ -678,6 +678,7 @@ function QuadrantView({
               weekId={weekId}
               quadrantKey={quadrant.key}
               store={store}
+              topLevel
             />
           ))}
         </ul>
@@ -691,11 +692,13 @@ function QuestRow({
   weekId,
   quadrantKey,
   store,
+  topLevel,
 }: {
   quest: Quest
   weekId: string
   quadrantKey: QuadrantKey
   store: Store
+  topLevel?: boolean
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const [menuTop, setMenuTop] = useState<number | null>(null)
@@ -703,14 +706,38 @@ function QuestRow({
   const titleRef = useRef<HTMLTextAreaElement>(null)
   const noteRef = useRef<HTMLTextAreaElement>(null)
   const rowRef = useRef<HTMLParagraphElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const menuButtonRef = useRef<HTMLButtonElement>(null)
 
-  const status = statusOf(quest)
+  const { done, voided } = stateOf(quest)
+  const closed = done || voided
   const progress = quest.children.length ? progressOf(quest) : null
-  const mark = status === 'done' ? '✓' : status === 'void' ? '—' : '☐'
+  const mark = done ? '✓' : '☐'
   const noteVisible = noteOpen || !!quest.note?.trim()
 
   useAutoGrow(titleRef, quest.title)
   useAutoGrow(noteRef, quest.note ?? '')
+
+  useEffect(() => {
+    if (!menuOpen) return
+
+    const closeOnOutside = (event: PointerEvent) => {
+      const target = event.target
+      if (!(target instanceof Node)) return
+      if (menuRef.current?.contains(target) || menuButtonRef.current?.contains(target)) return
+      setMenuOpen(false)
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMenuOpen(false)
+    }
+
+    document.addEventListener('pointerdown', closeOnOutside)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutside)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [menuOpen])
 
   const focusNote = () => {
     setNoteOpen(true)
@@ -766,15 +793,19 @@ function QuestRow({
   }
 
   return (
-    <li data-quest-id={quest.id}>
+    <li
+      data-quest-id={quest.id}
+      data-voided={voided ? 'true' : undefined}
+      data-closed={closed ? 'true' : undefined}
+    >
       <p ref={rowRef}>
         <button
           type="button"
           className="quest-check"
-          data-qstatus={status}
-          disabled={quest.children.length > 0 || status === 'void'}
+          data-done={done ? 'true' : 'false'}
+          disabled={quest.children.length > 0 || voided}
           onClick={() => store.run((doc) => toggleStatus(doc, weekId, quest.id), { focusId: quest.id })}
-          aria-label={status === 'done' ? '标记未完成' : '标记完成'}
+          aria-label={done ? '标记未完成' : '标记完成'}
         >
           <span className="quest-check-mark">{mark}</span>
         </button>
@@ -802,6 +833,7 @@ function QuestRow({
             </span>
           ) : null}
           <button
+            ref={menuButtonRef}
             type="button"
             className="quest-move"
             aria-label="任务操作"
@@ -819,6 +851,7 @@ function QuestRow({
 
       {menuOpen ? (
         <div
+          ref={menuRef}
           className="quest-menu"
           role="menu"
           style={menuTop == null ? undefined : { top: menuTop }}
@@ -833,31 +866,36 @@ function QuestRow({
           >
             {quest.note?.trim() ? '编辑备注' : '添加备注'}
           </button>
-          <div className="quest-menu-label">移动到</div>
-          {QUADRANT_KEYS.filter((key) => key !== quadrantKey).map((key) => (
-            <button
-              type="button"
-              key={key}
-              role="menuitem"
-              onClick={() => {
-                setMenuOpen(false)
-                const result = store.run((doc) => moveTask(doc, weekId, quest.id, key), { focusId: quest.id })
-                if (result) store.focusTitle(quest.id)
-              }}
-            >
-              {QUADRANT_TITLES[key]}
-            </button>
-          ))}
           <div className="quest-menu-separator" />
+          {topLevel ? (
+            <>
+              <div className="quest-menu-label">移动到</div>
+              {QUADRANT_KEYS.filter((key) => key !== quadrantKey).map((key) => (
+                <button
+                  type="button"
+                  key={key}
+                  role="menuitem"
+                  onClick={() => {
+                    setMenuOpen(false)
+                    const result = store.run((doc) => moveTask(doc, weekId, quest.id, key), { focusId: quest.id })
+                    if (result) store.focusTitle(quest.id)
+                  }}
+                >
+                  {QUADRANT_TITLES[key]}
+                </button>
+              ))}
+              <div className="quest-menu-separator" />
+            </>
+          ) : null}
           <button
             type="button"
             role="menuitem"
             onClick={() => {
               setMenuOpen(false)
-              store.run((doc) => setVoid(doc, weekId, quest.id, status !== 'void'), { focusId: quest.id })
+              store.run((doc) => setVoid(doc, weekId, quest.id, !voided), { focusId: quest.id })
             }}
           >
-            {status === 'void' ? '恢复' : '作废'}
+            {voided ? '恢复' : '作废'}
           </button>
           <button
             type="button"
