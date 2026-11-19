@@ -11,6 +11,7 @@ import {
   indentTask,
   moveTask,
   outdentTask,
+  reorderTask,
   setHeader,
   setNote,
   setReview,
@@ -279,6 +280,26 @@ describe('task tree operations', () => {
     expect(moved.doc.weeks[0].quadrants[1].children[0].children).toHaveLength(2)
     expect(moveTask(doc, 'w2', 'b', 'urgent-important')).toBeNull()
     expect(moveTask(doc, 'w2', 'a1', 'important')).toBeNull()
+  })
+
+  it('reorders a top-level subtree by one slot inside its quadrant', () => {
+    const doc = makeDoc()
+    const [a, b] = doc.weeks[0].quadrants[0].children
+    const lower = reorderTask(doc, 'w2', 'a', 1)!
+    expect(lower.id).toBe('a')
+    expect(lower.doc.weeks[0].quadrants[0].children).toEqual([b, a])
+    expect(lower.doc.weeks[0].quadrants.slice(1)).toEqual(doc.weeks[0].quadrants.slice(1))
+    expect(doc.weeks[0].quadrants[0].children).toEqual([a, b])
+    expect(reorderTask(lower.doc, 'w2', 'a', -1)?.doc).toEqual(doc)
+    checked(lower.doc)
+  })
+
+  it('does not reorder children, unknown tasks or tasks past a boundary', () => {
+    const doc = makeDoc()
+    expect(reorderTask(doc, 'w2', 'a1', 1)).toBeNull()
+    expect(reorderTask(doc, 'w2', 'missing', 1)).toBeNull()
+    expect(reorderTask(doc, 'w2', 'a', -1)).toBeNull()
+    expect(reorderTask(doc, 'w2', 'b', 1)).toBeNull()
   })
 
   it('sets title/note/review/header and clears empty note/review', () => {

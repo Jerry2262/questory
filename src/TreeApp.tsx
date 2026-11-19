@@ -8,6 +8,7 @@ import {
   indentTask,
   moveTask,
   outdentTask,
+  reorderTask,
   setHeader,
   setNote,
   setReview,
@@ -671,7 +672,7 @@ function QuadrantView({
 
       {quadrant.children.length ? (
         <ul>
-          {quadrant.children.map((quest) => (
+          {quadrant.children.map((quest, index) => (
             <QuestRow
               key={quest.id}
               quest={quest}
@@ -679,6 +680,8 @@ function QuadrantView({
               quadrantKey={quadrant.key}
               store={store}
               topLevel
+              canMoveUp={index > 0}
+              canMoveDown={index < quadrant.children.length - 1}
             />
           ))}
         </ul>
@@ -693,12 +696,16 @@ function QuestRow({
   quadrantKey,
   store,
   topLevel,
+  canMoveUp = false,
+  canMoveDown = false,
 }: {
   quest: Quest
   weekId: string
   quadrantKey: QuadrantKey
   store: Store
   topLevel?: boolean
+  canMoveUp?: boolean
+  canMoveDown?: boolean
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const [menuTop, setMenuTop] = useState<number | null>(null)
@@ -738,6 +745,12 @@ function QuestRow({
       document.removeEventListener('keydown', closeOnEscape)
     }
   }, [menuOpen])
+
+  const reorder = (direction: -1 | 1) => {
+    setMenuOpen(false)
+    const result = store.run((doc) => reorderTask(doc, weekId, quest.id, direction), { focusId: quest.id })
+    if (result) store.focusTitle(quest.id)
+  }
 
   const focusNote = () => {
     setNoteOpen(true)
@@ -869,6 +882,13 @@ function QuestRow({
           <div className="quest-menu-separator" />
           {topLevel ? (
             <>
+              <button type="button" role="menuitem" disabled={!canMoveUp} onClick={() => reorder(-1)}>
+                上移一位
+              </button>
+              <button type="button" role="menuitem" disabled={!canMoveDown} onClick={() => reorder(1)}>
+                下移一位
+              </button>
+              <div className="quest-menu-separator" />
               <div className="quest-menu-label">移动到</div>
               {QUADRANT_KEYS.filter((key) => key !== quadrantKey).map((key) => (
                 <button

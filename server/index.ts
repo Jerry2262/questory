@@ -10,10 +10,11 @@ import { Hono } from 'hono'
 
 import type { QuestDoc } from '../src/model/types'
 import { validateQuestDoc } from '../src/model/validate'
-import { ensureCurrentWeek } from '../src/model/week'
+import { currentWeekOf, ensureCurrentWeek } from '../src/model/week'
 import { backupToday } from './backup'
 import { ensureDataFile } from './data'
 import { isLocalHost, isTrustedWrite } from './guard'
+import { weekMarkdown } from './week-markdown'
 
 const ROOT = resolve(import.meta.dirname, '..')
 // 数据目录可覆盖：E2E 用临时目录跑独立实例，绝不碰真实数据
@@ -66,6 +67,25 @@ app.get('/api/doc', async (c) => {
   const raw = await readFile(DATA, 'utf8')
   c.header('ETag', `"${revisionOf(raw)}"`)
   return c.body(raw, 200, { 'content-type': 'application/json; charset=utf-8' })
+})
+
+// 只读定位已有周，一次返回整周 Markdown；缺周时不建周、不回退。
+app.get('/api/weeks/:week', async (c) => {
+  if (Object.keys(c.req.queries()).length) return c.json({ error: 'query parameters not supported' }, 400)
+  try {
+    const raw = await readFile(DATA, 'utf8')
+    const parsed: unknown = JSON.parse(raw)
+    if (!isQuestDoc(parsed)) return c.json({ error: 'invalid doc' }, 500)
+    assertValidDoc(parsed)
+    const key = c.req.param('week')
+    const week = key === 'current'
+      ? currentWeekOf(parsed)
+      : parsed.weeks.find((item) => item.label === key)
+    if (!week) return c.json({ error: key === 'current' ? 'current week not found' : 'week not found' }, 404)
+    return c.body(weekMarkdown(week), 200, { 'content-type': 'text/markdown; charset=utf-8' })
+  } catch (cause) {
+    return c.json({ error: cause instanceof Error ? cause.message : String(cause) }, 500)
+  }
 })
 
 /** 写盘串行、先写临时文件再原子替换：半截文件比报错更难查 */

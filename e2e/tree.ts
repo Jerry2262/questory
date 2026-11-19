@@ -813,8 +813,53 @@ try {
     '按 Escape 后菜单应关闭',
   )
 
+  // 同象限手动排序：首尾限制、子树跟随、焦点、撤销与刷新
+  const quadrantSection = page.locator('section[data-quadrant="urgent-important"]').filter({ has: voidParentRow })
+  const topRows = quadrantSection.locator(':scope > ul > li[data-quest-id]')
+  const rowOrder = () => topRows.evaluateAll((rows) => rows.map((row) => row.getAttribute('data-quest-id')))
+  const originalOrder = await rowOrder()
+  assert.equal(originalOrder.at(-1), voidParent.id)
+  const expectedOrder = [...originalOrder.slice(0, -2), voidParent.id, originalOrder.at(-2)]
+  const orderOnDisk = (doc: QuestDoc) => doc.weeks
+    .flatMap((week) => week.quadrants)
+    .find((quadrant) => quadrant.children.some((quest) => quest.id === voidParent.id))
+    ?.children.map((quest) => quest.id)
+
+  const firstRow = topRows.first()
+  await firstRow.locator(':scope > p .quest-move').click()
+  assert.equal(await firstRow.locator(':scope > .quest-menu').getByRole('menuitem', { name: '上移一位' }).isDisabled(), true)
+  await page.keyboard.press('Escape')
+
+  await openChildRow.locator(':scope > p .quest-move').click()
+  assert.equal(await openChildRow.locator(':scope > .quest-menu').getByRole('menuitem', { name: /移一位/ }).count(), 0)
+  await page.keyboard.press('Escape')
+
+  const parentMenu = voidParentRow.locator(':scope > .quest-menu')
+  const openParentMenu = () => voidParentRow.locator(':scope > p .quest-move').click()
+  await openParentMenu()
+  assert.equal(await parentMenu.getByRole('menuitem', { name: '下移一位' }).isDisabled(), true)
+  await parentMenu.getByRole('menuitem', { name: '上移一位' }).click()
+  assert.deepEqual(await rowOrder(), expectedOrder, '只交换相邻的两条顶层任务')
+  await page.waitForFunction((id) => document.activeElement?.closest('li')?.getAttribute('data-quest-id') === id, voidParent.id)
+  await waitData((doc) => orderOnDisk(doc)?.at(-2) === voidParent.id, '上移落盘')
+  const savedParent = allQuests(read()).find((quest) => quest.id === voidParent.id)
+  assert.deepEqual(savedParent?.children.map((quest) => quest.id), [openChild.id, doneChild.id])
+
+  await openParentMenu()
+  await parentMenu.getByRole('menuitem', { name: '下移一位' }).click()
+  assert.deepEqual(await rowOrder(), originalOrder)
+  await waitData((doc) => orderOnDisk(doc)?.at(-1) === voidParent.id, '下移落盘')
+  await page.keyboard.press('Control+z')
+  await waitData((doc) => orderOnDisk(doc)?.at(-2) === voidParent.id, '撤销下移')
+  assert.deepEqual(await rowOrder(), expectedOrder)
+
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await voidParentRow.waitFor()
+  assert.deepEqual(await rowOrder(), expectedOrder, '刷新后保留新顺序')
+  assert.equal(await voidParentRow.locator(`:scope > ul > li[data-quest-id="${openChild.id}"]`).count(), 1)
+
   assert.deepEqual(errors, [], '页面不应有运行时错误')
-  console.log('e2e: 标题/Enter/Tab/勾选/备注/周标题备注/删除撤销/保存/周跳转/回到顶部/上下键/单行标题/假期周跳过/链接/作废叠加/菜单外点关闭 全部通过')
+  console.log('e2e: 标题/Enter/Tab/勾选/备注/周标题备注/删除撤销/保存/周跳转/回到顶部/上下键/单行标题/假期周跳过/链接/作废叠加/菜单外点关闭/象限内排序 全部通过')
 } finally {
   // 服务启动超时、浏览器崩溃、spawn 失败等路径也走这里：先确认进程退出，再删临时目录
   await browser?.close().catch(() => undefined)

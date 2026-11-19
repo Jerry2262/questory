@@ -300,6 +300,26 @@ export function moveTask(
   })
 }
 
+/** 只交换象限内相邻的顶层任务；任务子树和状态原样保留。 */
+export function reorderTask(
+  doc: QuestDoc,
+  weekId: string,
+  questId: string,
+  direction: -1 | 1,
+): OpResult<{ id: string }> {
+  return edit(doc, (draft) => {
+    const location = findQuest(draft, weekId, questId)
+    if (!location || location.parent || location.week.kind === 'holiday') return null
+    const { index, siblings, quest } = location
+    const target = index + direction
+    if (target < 0 || target >= siblings.length) return null
+
+    siblings[index] = siblings[target]
+    siblings[target] = quest
+    return { id: questId }
+  })
+}
+
 /** Tab：变成前一个同级任务最后一个子任务。第一个同级、作废目标不能缩进。 */
 export function indentTask(doc: QuestDoc, weekId: string, questId: string): OpResult<{ id: string }> {
   return edit(doc, (draft) => {
